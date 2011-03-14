@@ -14,7 +14,7 @@
 # only .cpp support, don't use .c files
 # it will look for files in any folder inside the application
 # folder except that in the EXCLUDE_FROM_SOURCE variable
-# but you'll need to add the include paths in USER_CFLAGS
+# it doesn't autodetect include paths yet
 # add the include paths in the USER_CFLAGS variable
 # using the gcc syntax: -Ipath
 #
@@ -24,6 +24,23 @@
 #
 # edit the following  vars to customize the makefile
 
+include ../../../libs/openFrameworksCompiled/project/android/paths.make
+
+ifeq ($(findstring Android,$(MAKECMDGOALS)),Android)
+	ARCH = android
+	ifeq ($(shell uname),Darwin)
+		HOST_PLATFORM = darwin-x86
+	else
+		HOST_PLATFORM = linux-x86
+	endif
+endif
+
+ifeq ($(ARCH),android)
+	COMPILER_OPTIMIZATION = -Os
+	NDK_PLATFORM = android-8
+else
+	COMPILER_OPTIMIZATION = -march=native -mtune=native -Os
+endif
 EXCLUDE_FROM_SOURCE="bin,.xcodeproj,obj"
 USER_CFLAGS = -Istarter -Igarfeild -Iartvertiser -Isrc/ofxThread -Isrc/ofxControlPanel -Iartvertiser/FProfiler -Iartvertiser/MatrixTracker
 USER_LD_FLAGS = 
@@ -36,57 +53,98 @@ USER_LIBS =
 
 
 SHELL =  /bin/sh
-CXX =  g++
-
-ARCH = $(shell uname -m)
-ifeq ($(ARCH),x86_64)
-	LIBSPATH=linux64
-	COMPILER_OPTIMIZATION = -march=native -mtune=native -finline-functions -funroll-all-loops  -O3
-else ifeq ($(ARCH),armv7l)
-	LIBSPATH=linuxarmv7l
-	COMPILER_OPTIMIZATION = -march=armv7-a -mtune=cortex-a8 -finline-functions -funroll-all-loops  -O3 -funsafe-math-optimizations -mfpu=neon -ftree-vectorize -mfloat-abi=softfp
+ifneq ($(ARCH),android)
+	CXX =  g++
+	ARCH = $(shell uname -m)
+	ifeq ($(ARCH),x86_64)
+		LIBSPATH=linux64
+	else
+		LIBSPATH=linux
+	endif
 else
-	LIBSPATH=linux
-	COMPILER_OPTIMIZATION = -march=native -mtune=native -finline-functions -funroll-all-loops  -O3
+	ifeq ($(findstring Release_arm7,$(MAKECMDGOALS)),Release_arm7)
+		LIBSPATH =android/armeabi-v7a
+	else
+		LIBSPATH =android/armeabi
+	endif
+	#NDK_ROOT = $(shell cat ../../../libs/openFrameworksCompiled/project/android/ndk_path.make)
+	#SDK_ROOT = $(shell cat ../../../libs/openFrameworksCompiled/project/android/sdk_path.make)
+	TOOLCHAIN=arm-linux-androideabi-4.4.3
+	TOOLCHAIN_PATH=$(NDK_ROOT)/toolchains/$(TOOLCHAIN)/prebuilt/$(HOST_PLATFORM)/bin/
+	ANDROID_PREFIX=arm-linux-androideabi-
+	CC=$(NDK_ROOT)/toolchains/$(TOOLCHAIN)/prebuilt/$(HOST_PLATFORM)/bin/$(ANDROID_PREFIX)gcc
+	CXX=$(NDK_ROOT)/toolchains/$(TOOLCHAIN)/prebuilt/$(HOST_PLATFORM)/bin/$(ANDROID_PREFIX)g++
+	AR=$(NDK_ROOT)/toolchains/$(TOOLCHAIN)/prebuilt/$(HOST_PLATFORM)/bin/$(ANDROID_PREFIX)ar
+	SYSROOT=$(NDK_ROOT)/platforms/$(NDK_PLATFORM)/arch-arm/
+	CFLAGS += -nostdlib --sysroot=$(SYSROOT) -fno-short-enums 
+	CFLAGS += -I"$(NDK_ROOT)/platforms/$(NDK_PLATFORM)/arch-arm/usr/include" -I"$(NDK_ROOT)/sources/cxx-stl/gnu-libstdc++/include/" -I"$(NDK_ROOT)/sources/cxx-stl/gnu-libstdc++/libs/armeabi/include"
+	CFLAGS += -DANDROID
 endif
 
-NODEPS = clean CleanDebug CleanRelease
+NODEPS = clean
 SED_EXCLUDE_FROM_SRC = $(shell echo  $(EXCLUDE_FROM_SOURCE) | sed s/\,/\\\\\|/g)
 SOURCE_DIRS = $(shell find . -maxdepth 1 -mindepth 1 -type d | grep -v $(SED_EXCLUDE_FROM_SRC) | sed s/.\\///)
-SOURCES = $(shell find $(SOURCE_DIRS) -name "*.cpp")
-OBJFILES = $(patsubst %.cpp,%.o,$(SOURCES))
+SOURCES = $(shell find $(SOURCE_DIRS) -name "*.cpp" -or -name "*.c")
+OBJFILES = $(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(SOURCES)))
 APPNAME = $(shell basename `pwd`)
 CORE_INCLUDES = $(shell find ../../../libs/openFrameworks/ -type d)
 CORE_INCLUDE_FLAGS = $(addprefix -I,$(CORE_INCLUDES))
-INCLUDES = $(shell find ../../../libs/*/include -type d)
+INCLUDES = $(shell find ../../../libs/*/include -type d | grep -v glu | grep -v quicktime | grep -v poco)
 INCLUDES_FLAGS = $(addprefix -I,$(INCLUDES))
-LIB_STATIC = $(shell ls ../../../libs/*/lib/$(LIBSPATH)/*.a | grep -v openFrameworksCompiled | sed "s/.*\\/lib\([^/]*\)\.a/-l\1/")
+INCLUDES_FLAGS += -I../../../libs/poco/include
+ifeq ($(ARCH),android)
+	INCLUDES_FLAGS += -I../../../libs/glu/include_android
+else
+ 	INCLUDES_FLAGS += -I../../../libs/glu/include
+	INCLUDES_FLAGS += $(shell pkg-config  glew gstreamer-0.10 gstreamer-video-0.10 gstreamer-base-0.10 libudev --cflags)
+	#check if gtk exists and add it
+	GTK = $(shell pkg-config gtk+-2.0 --exists; echo $$?)
+	ifeq ($(GTK),0)
+		CFLAGS += $(shell pkg-config gtk+-2.0 --cflags) -DOF_USING_GTK
+		LIBS += $(shell pkg-config gtk+-2.0 --libs)
+	endif
+endif
+LIB_STATIC = $(shell ls ../../../libs/*/lib/$(LIBSPATH)/*.a | grep -v openFrameworksCompiled | grep -v poco)
 LIB_SHARED = $(shell ls ../../../libs/*/lib/$(LIBSPATH)/*.so | grep -v openFrameworksCompiled| sed "s/.*\\/lib\([^/]*\)\.so/-l\1/")
-
-#LIB_PATHS_FLAGS = -L../../../libs/openFrameworksCompiled/lib/$(LIBSPATH)
+LIB_STATIC += ../../../libs/poco/lib/$(LIBSPATH)/libPocoNet.a ../../../libs/poco/lib/$(LIBSPATH)/libPocoXML.a ../../../libs/poco/lib/$(LIBSPATH)/libPocoUtil.a ../../../libs/poco/lib/$(LIBSPATH)/libPocoFoundation.a 
 LIB_PATHS_FLAGS = $(shell ls -d ../../../libs/*/lib/$(LIBSPATH) | sed "s/\(\.*\)/-L\1/")
+ifeq ($(ARCH),android)
+	LIB_PATHS_FLAGS += -L../../../libs/openFrameworksCompiled/lib/android
+endif
 
-CFLAGS = -Wall -fexceptions
+CFLAGS += -Wall -fexceptions
 CFLAGS += -I. 
 CFLAGS += $(INCLUDES_FLAGS)
 CFLAGS += $(CORE_INCLUDE_FLAGS)
-CFLAGS += `pkg-config  gstreamer-0.10 gstreamer-video-0.10 gstreamer-base-0.10 libudev libavcodec libavformat libavutil --cflags`
+ 
 
-LDFLAGS = $(LIB_PATHS_FLAGS) -Wl,-rpath=./libs
 
-LIBS = $(LIB_SHARED)
+LIBS += $(LIB_SHARED)
 LIBS += $(LIB_STATIC)
-LIBS +=`pkg-config  gstreamer-0.10 gstreamer-video-0.10 gstreamer-base-0.10 libudev --libs`
-LIBS += -lglut -lGL -lGLU -lasound
+ifeq ($(ARCH),android)
+	LDFLAGS = $(LIB_PATHS_FLAGS) --sysroot=$(SYSROOT) -nostdlib -L"$(NDK_ROOT)/sources/cxx-stl/gnu-libstdc++/libs/armeabi"
+	LIBS += -lstdc++ -lsupc++ -lGLU -lgcc -lz -lGLESv1_CM -llog -ldl -lm -lc 
+else
+	LDFLAGS = $(LIB_PATHS_FLAGS) -Wl,-rpath=./libs
+	LIBS += $(shell pkg-config  glew gstreamer-0.10 gstreamer-video-0.10 gstreamer-base-0.10 gstreamer-app-0.10 libudev --libs)
+	LIBS += -lglut -lGL -lGLU -lasound -lfreeimage
+endif
+
 
 ifeq ($(findstring addons.make,$(wildcard *.make)),addons.make)
 	ADDONS_INCLUDES = $(shell find ../../../addons/*/src/ -type d)
 	ADDONS_INCLUDES += $(shell find ../../../addons/*/libs/ -type d)
 	ADDONSCFLAGS = $(addprefix -I,$(ADDONS_INCLUDES))
 	
-	ADDONS_LIBS_STATICS = $(shell ls ../../../addons/*/libs/*/lib/$(LIBSPATH)/*.a)
+	ifeq ($(findstring libsorder.make,$(wildcard ../../../addons/*/libs/*/lib/$(LIBSPATH)/libsorder.make)),libsorder.make) 
+		ADDONS_LIBS_W_ORDER = $(shell cat ../../../addons/*/libs/*/lib/$(LIBSPATH)/libsorder.make)
+	endif
+	
+	SED_EXCLUDE_LIBS = $(addsuffix \ \\\| , $(ADDONS_LIBS_W_ORDER))
+	ADDONS_LIBS_STATICS = $(shell ls ../../../addons/*/libs/*/lib/$(LIBSPATH)/*.a | grep -v "$(SED_EXCLUDE_LIBS) null")
+	ADDONS_LIBS_STATICS += $(addprefix -l, $(ADDONS_LIBS_W_ORDER))
+	ADDONS_LIBS_STATICS += $(addprefix -L, $(shell ls ../../../addons/*/libs/*/lib/$(LIBSPATH)/libsorder.make | sed s/libsorder.make//g))
 	ADDONS_LIBS_SHARED = $(shell ls ../../../addons/*/libs/*/lib/$(LIBSPATH)/*.so)
-
 	ADDONSLIBS = $(ADDONS_LIBS_STATICS)
 	ADDONSLIBS += $(ADDONS_LIBS_SHARED)
 
@@ -95,147 +153,143 @@ ifeq ($(findstring addons.make,$(wildcard *.make)),addons.make)
 	ADDONS_LIBS_REL_DIRS = $(addsuffix /libs, $(ADDONS))
 	ADDONS_DIRS = $(addprefix ../../../addons/, $(ADDONS_REL_DIRS) )
 	ADDONS_LIBS_DIRS = $(addprefix ../../../addons/, $(ADDONS_LIBS_REL_DIRS) )
-	ADDONS_SOURCES = $(shell find $(ADDONS_DIRS) -name "*.cpp")
-	ADDONS_SOURCES += $(shell find $(ADDONS_LIBS_DIRS) -name "*.cpp" 2>/dev/null)
-	ADDONS_OBJFILES = $(subst ../../../, ,$(patsubst %.cpp,%.o,$(ADDONS_SOURCES)))
+	ADDONS_SOURCES = $(shell find $(ADDONS_DIRS) -name "*.cpp" -or -name "*.c")
+	ADDONS_SOURCES += $(shell find $(ADDONS_LIBS_DIRS) -name "*.cpp" -or -name "*.c" 2>/dev/null)
+	ADDONS_OBJFILES = $(subst ../../../, ,$(patsubst %.c,%.o,$(patsubst %.cpp,%.o,$(ADDONS_SOURCES))))
 endif
-
 
 
 ifeq ($(findstring Debug,$(MAKECMDGOALS)),Debug)
 	TARGET_CFLAGS = -g
 	TARGET_LIBS = -lopenFrameworksDebug
-	OBJ_OUTPUT = obj/Debug/
 	TARGET_NAME = Debug
-	TARGET = bin/$(APPNAME)_debug
-	CLEANTARGET = CleanDebug
 endif
 
 ifeq ($(findstring Release,$(MAKECMDGOALS)),Release)
 	TARGET_CFLAGS = $(COMPILER_OPTIMIZATION)
 	TARGET_LIBS = -lopenFrameworks
-	OBJ_OUTPUT = obj/Release/
 	TARGET_NAME = Release
-	TARGET = bin/$(APPNAME)
-	CLEANTARGET = CleanRelease
 endif
 
-	# default to release
-ifeq (,$(MAKECMDGOALS))
-	TARGET_CFLAGS = $(COMPILER_OPTIMIZATION)
-	TARGET_LIBS = -lopenFrameworks
-	OBJ_OUTPUT = obj/Release/
-	TARGET_NAME = Release
-	TARGET = bin/$(APPNAME)
+ifeq ($(ARCH),android)
+	ifeq ($(findstring Debug,$(MAKECMDGOALS)),Debug)
+		TARGET = libs/armeabi/libOFAndroidApp.so
+		TARGET_LIBS = -lopenFrameworksDebug
+		LDFLAGS += -Wl,--fix-cortex-a8 -shared
+	endif
+	
+	ifeq ($(findstring Release,$(MAKECMDGOALS)),Release)
+	    TARGET = libs/armeabi/libOFAndroidApp.so
+		TARGET_LIBS = -lopenFrameworks
+		LDFLAGS += -Wl,--fix-cortex-a8 -shared
+	endif
+	
+	ifeq ($(findstring Release_arm7,$(MAKECMDGOALS)),Release_arm7)
+		TARGET_NAME = Release_arm7
+		TARGET_CFLAGS += -march=armv7-a -mfloat-abi=softfp -mfpu=vfp
+	    TARGET = libs/armeabi-v7a/libOFAndroidApp.so
+		TARGET_LIBS = -lopenFrameworks_arm7
+		#LDFLAGS += -shared  already included through Release
+	endif
+	
+	ifeq ($(findstring TestLink,$(MAKECMDGOALS)),TestLink)
+		TARGET_NAME = Debug
+		TARGET_LIBS = -lopenFrameworksDebug
+		LDFLAGS += -Wl,--entry=main,--fix-cortex-a8
+	    BIN_NAME = $(APPNAME)
+	    TARGET = obj/$(BIN_NAME)
+	endif
+else
+	ifeq ($(findstring Debug,$(MAKECMDGOALS)),Debug)
+	    BIN_NAME = $(APPNAME)_debug
+		TARGET = bin/$(BIN_NAME)
+	endif
+	
+	ifeq ($(findstring Release,$(MAKECMDGOALS)),Release)
+	    BIN_NAME = $(APPNAME)
+		TARGET = bin/$(BIN_NAME)
+	endif
+	
+	ifeq ($(MAKECMDGOALS),)
+		TARGET_NAME = Release
+	    BIN_NAME = $(APPNAME)
+		TARGET = bin/$(BIN_NAME)
+		TARGET_LIBS = -lopenFrameworks
+	endif
 endif
-
-ifeq ($(MAKECMDGOALS),depend-Release)
-	OBJ_OUTPUT = obj/Release/
-endif
-
-ifeq ($(MAKECMDGOALS),depend-Debug)
-	OBJ_OUTPUT = obj/Debug/
-endif
-
 
 ifeq ($(MAKECMDGOALS),clean)
 	TARGET = bin/$(APPNAME)_debug bin/$(APPNAME)
 endif
 
-
-ifeq ($(TARGET_NAME),Release)
-	OF_DEPEND = ../../../libs/openFrameworksCompiled/lib/$(LIBSPATH)/libopenFrameworks.a
-else
-	OF_DEPEND = ../../../libs/openFrameworksCompiled/lib/$(LIBSPATH)/libopenFrameworksDebug.a
-endif
-
+OBJ_OUTPUT = obj/$(TARGET_NAME)/
+CLEANTARGET = Clean$(TARGET_NAME)
 OBJS = $(addprefix $(OBJ_OUTPUT), $(OBJFILES))
 DEPFILES = $(patsubst %.o,%.d,$(OBJS))
-
-# addons
 ifeq ($(findstring addons.make,$(wildcard *.make)),addons.make)
 	ADDONS_OBJS = $(addprefix $(OBJ_OUTPUT), $(ADDONS_OBJFILES))
+    DEPFILES += $(patsubst %.o,%.d,$(ADDONS_OBJS))
 endif
 
-
-.PHONY: Debug Release all after depend
-
+.PHONY: Debug Release all after afterDebugAndroid afterReleaseAndroid
+	
 Release: $(TARGET) after
 
 Debug: $(TARGET) after
 
-all: $(TARGET)
+all: 
 	make Release
-	make Depend
-
-depend: 
-	make depend-Release 
-	make depend-Debug
-
-debugging_blah:
-	@echo MSG: 
-	@echo $(MSG)
-	@echo source dirs:
-	@echo $(SOURCE_DIRS)
-	@echo sources:
-	@echo $(SOURCES)
-	@echo addons_sources:
-	@echo $(ADDONS_SOURCES)	
-	@echo obj_output:
-	@echo $(OBJ_OUTPUT)	
-	@echo objs:
-	@echo $(OBJS)
-	@echo addons_objs:
-	@echo $(ADDONS_OBJS)
-	@echo makecmdgoals:
-	@echo $(MAKECMDGOALS)
+	
 	
 
-# we need separate rules for Debug and Release because of different obj/ paths
-depend-Release: $(DEPFILES)
-depend-Debug: $(DEPFILES)
+DebugAndroid: $(TARGET)
 
-# This is the rule for creating the dependency files
-#$(OBJ_OUTPUT)%.d : %.cpp
-#	@echo " * "creating dependency file $@ for $<
-#	@mkdir -p $(@D)
-#	@# dependency creation flags
-#	@# -MM: exclude system headers
-#	@# -MT: change target name
-#	@# -MF: write to file
-#	@$(CXX) $(TARGET_CFLAGS) $(CFLAGS) $(ADDONSCFLAGS) $(USER_CFLAGS) -MM -MT $(patsubst %.d,%.o,$@) -MF $@ $<
+ReleaseAndroid: $(TARGET)
+
+Release_arm7Android: $(TARGET) afterReleaseAndroid
+
+TestLinkAndroid: $(TARGET) afterDebugAndroid
+
+AndroidDebug:
+	make DebugAndroid
+	make TestLinkAndroid
 	
-#$(OBJ_OUTPUT)%.d : ../../../%.cpp
-#	@echo " * "creating addon dependency file $@ for $<
-#	@mkdir -p $(@D)
-#	@# dependency creation flags
-#	@# -MM: exclude system headers
-#	@# -MT: change target name
-#	@# -MF: write to file
-#	@$(CXX) $(TARGET_CFLAGS) $(CFLAGS) $(ADDONSCFLAGS) $(USER_CFLAGS) -MM -MT $(patsubst %.d,%.o,$@) -MF $@ $<
+AndroidRelease:
+	make ReleaseAndroid
+	make Release_arm7Android
+
 
 #This rule does the compilation
-#$(OBJS): $(SOURCES) $(DEPFILES)
-$(OBJ_OUTPUT)%.o : ../../../%.cpp
-	@echo " * "compiling addon object $@ from $<
-	@mkdir -p $(@D)
-	@# -MMD: update the dependency file
-	$(CXX) $(TARGET_CFLAGS) $(CFLAGS) $(ADDONSCFLAGS) $(USER_CFLAGS) -MMD -o $(patsubst ../../../%.cpp,$(OBJ_OUTPUT)%.o,$<) -c $<
+#$(OBJS): $(SOURCES)
+$(OBJ_OUTPUT)%.o: %.cpp
+	@echo "compiling object for: " $<
+	mkdir -p $(@D)
+	$(CXX) -c $(TARGET_CFLAGS) $(CFLAGS) $(ADDONSCFLAGS) $(USER_CFLAGS) -MMD -MP -MF$(OBJ_OUTPUT)$*.d -MT$(OBJ_OUTPUT)$*.d -o$@ -c $<  
 
-$(OBJ_OUTPUT)%.o : %.cpp 
-	@echo " * "compiling object $@ from $< 
-	@mkdir -p $(@D)
-	@# -MMD: update the dependency file
-	$(CXX) $(TARGET_CFLAGS) $(CFLAGS) $(ADDONSCFLAGS) $(USER_CFLAGS) -MMD -o $(patsubst %.cpp,$(OBJ_OUTPUT)%.o,$<) -c $<
+$(OBJ_OUTPUT)%.o: %.c
+	@echo "compiling object for: " $<
+	mkdir -p $(@D)
+	$(CC) -c $(TARGET_CFLAGS) $(CFLAGS) $(ADDONSCFLAGS) $(USER_CFLAGS) -MMD -MP -MF$(OBJ_OUTPUT)$*.d -MT$(OBJ_OUTPUT)$*.d -o$@ -c $< 
 
 
-$(TARGET) : $(OBJS) $(ADDONS_OBJS) $(OF_DEPEND)
-	@echo linking $(TARGET)
-	@echo "creating " $(TARGET)
-	$(CXX) $(TARGET_CFLAGS) -o $@ $(OBJS) $(ADDONS_OBJS) $(CFLAGS) $(ADDONSCFLAGS) $(USER_CFLAGS) $(LDFLAGS) $(USER_LDFLAGS) $(TARGET_LIBS) $(LIBS) $(ADDONSLIBS) $(USER_LIBS)
+$(OBJ_OUTPUT)%.o: ../../../%.cpp
+	@echo "compiling addon object for" $<
+	mkdir -p $(@D)
+	$(CXX) $(TARGET_CFLAGS) $(CFLAGS) $(ADDONSCFLAGS) $(USER_CFLAGS) -MMD -MP -MF$(OBJ_OUTPUT)$*.d -MT$(OBJ_OUTPUT)$*.d -o $@ -c $<
 
-.PHONY: clean CleanDebug CleanRelease
-clean: 
+$(OBJ_OUTPUT)%.o: ../../../%.c
+	@echo "compiling addon object for" $<
+	mkdir -p $(@D)
+	$(CC) $(TARGET_CFLAGS) $(CFLAGS) $(ADDONSCFLAGS) $(USER_CFLAGS) -MMD -MP -MF$(OBJ_OUTPUT)$*.d -MT$(OBJ_OUTPUT)$*.d -o $@ -c $<
+	
+$(TARGET): $(OBJS) $(ADDONS_OBJS)
+	@echo "linking" $(TARGET) $(GTK)
+	$(CXX) -o $@ $(OBJS) $(ADDONS_OBJS) $(LDFLAGS) $(USER_LDFLAGS) $(TARGET_LIBS) $(ADDONSLIBS) $(USER_LIBS) $(LIBS) 
+
+-include $(DEPFILES)
+
+.PHONY: clean CleanDebug CleanRelease CleanAndroid
+clean:
 	rm -Rf obj
 	rm -f -v $(TARGET)
 	rm -Rf -v bin/libs
@@ -243,22 +297,47 @@ clean:
 $(CLEANTARGET):
 	rm -Rf -v $(OBJ_OUTPUT)
 	rm -f -v $(TARGET)
+	
+CleanAndroid:
+	rm -Rf obj
+	rm -f -v libs/armeabi-v7a/libOFAndroidApp.so
+	rm -f -v libs/armeabi/libOFAndroidApp.so
+	rm -f -v obj/$(APPNAME)
 
 
-after:
-	@cp -r ../../../export/$(LIBSPATH)/libs bin/
+afterDebugAndroid:$(TARGET)
+	if [ -f libs/armeabi-v7a/libOFAndroidApp.so ]; then rm libs/armeabi-v7a/libOFAndroidApp.so; fi
+	touch AndroidManifest.xml
+	$(SDK_ROOT)/tools/android update project --target $(NDK_PLATFORM) --path $(PWD)
+	$(ANT_BIN)ant debug
+	cp bin/OFActivity-debug.apk bin/$(APPNAME).apk
+	if [ "$(shell $(SDK_ROOT)/platform-tools/adb get-state)" = "device" ]; then \
+		$(SDK_ROOT)/platform-tools/adb install -r bin/$(APPNAME).apk; \
+	fi
+	
+afterReleaseAndroid:$(TARGET)
+	if [ -f obj/$(BIN_NAME) ]; then rm obj/$(BIN_NAME); fi
+	touch AndroidManifest.xml
+	$(SDK_ROOT)/tools/android update project --target $(NDK_PLATFORM) --path $(PWD)
+	ant debug
+	cp bin/OFActivity-debug.apk bin/$(APPNAME).apk  
+	if [ "$(shell $(SDK_ROOT)/platform-tools/adb get-state)" = "device" ]; then \
+		$(SDK_ROOT)/platform-tools/adb install -r bin/$(APPNAME).apk; \
+	fi
+	
+after:$(TARGET)
+	cp -r ../../../export/$(LIBSPATH)/libs bin/
 	@echo
 	@echo "     compiling done"
 	@echo "     to launch the application"	
 	@echo
 	@echo "     cd bin"
-	@echo "     ./$(TARGET)"
+	@echo "     ./$(BIN_NAME)"
 	@echo
     
 
 .PHONY: help
 help:
- 
 	@echo 
 	@echo openFrameworks universal makefile
 	@echo
@@ -285,14 +364,3 @@ help:
 	@echo in this directory and add the names of the addons you want to
 	@echo include
 	@echo
-
-# include dependencies
-#ifeq (0,$(words $(findstring $(MAKECMDGOALS),$(NODEPS))))
-#	MSG = \'$(findstring $(MAKECMDGOALS),$(NODEP))\' : depfiles match $(MAKECMDGOALS) $(NODEP)	
-#	-include $(DEPFILES)
-#else
-#	MSG = \'$(findstring $(MAKECMDGOALS),$(NODEP))\' : depfiles included
-#endif
-
--include $(DEPFILES)
-

@@ -254,7 +254,7 @@ void affine_image_generator::set_roi(int _u_corner1, int _v_corner1,
 
 static int min4(int a, int b, int c, int d) 
 {
-  return MIN(a, MIN(b, MIN(c,d)));
+  return CV_MIN(a, CV_MIN(b, CV_MIN(c,d)));
 }
 
 static int max4(int a, int b, int c, int d) 
@@ -264,7 +264,7 @@ static int max4(int a, int b, int c, int d)
 
 static float min4(float a, float b, float c, float d) 
 {
-  return MIN(a, MIN(b, MIN(c,d)));
+  return CV_MIN(a, CV_MIN(b, CV_MIN(c,d)));
 }
 
 static float max4(float a, float b, float c, float d) 
